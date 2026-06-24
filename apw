@@ -1,0 +1,413 @@
+#!/bin/bash
+# Administrador de contraseñas mejorado con gui dialog. 
+# Autor: Espectador.
+
+# Funcion para entrar en ruta de trabajo y crear archivo oculto 
+function RUTA_TRABAJO() {
+	
+	# Variables con directorios y variables globales
+	DIRECTORIO_CASA="$HOME/.apw"	
+	ARCHIVO=".Passwords.txt"
+	CLAVE_FILE=".Passwordkey.enc"
+
+	# Variables globales de archivos temporales
+	TEMP_DIR=$(mktemp -d)
+	TEMP_FILE=$(mktemp)
+
+	# Comprobar existencia de directorio de trabajo.
+	if [ ! -f $DIRECTORIO_CASA ]; then
+		mkdir $DIRECTORIO_CASA
+		cd $DIRECTORIO_CASA
+	else
+		cd $DIRECTORIO_CASA
+	fi
+	
+}
+
+function INGRESO_CLAVE() {	
+	# Solicitar clave de cifrado en dialog.
+	CLAVE=$(dialog --insecure --passwordbox "Ingrese su clave de cifrado:" 10 25 3>&1 1>&2 2>&3 3>&-)
+	if [ $? == 0 ]; then
+		# Comprobar que el campo no esté vacio
+		if [ -z $CLAVE ]; then
+			dialog --msgbox "No se ha ingresado ninguna clave." 5 40
+			clear
+			exit 1
+		fi
+
+		#Comprobar si es la primera ejeción y Configuracion de contraseña.
+		if [ ! -f $CLAVE_FILE ]; then
+			dialog --clear \
+				--msgbox "Es la primera ejecución. Se ha configurado la clave de cifrado." 0 0
+			echo "test" | openssl enc -e -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $CLAVE_FILE
+		else
+			#Verificar la clave de cifrado
+			if ! openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 -in $CLAVE_FILE &> /dev/null; then
+				dialog --msgbox "Clave de cifrado incorrecta." 5 35 
+				clear
+				exit 1
+			fi
+		fi
+	else
+		clear
+		exit 0
+	fi
+
+	#Asegurar permisos restrictivos en el archivo
+	if [ -f $ARCHIVO ]; then
+		chmod 600 $ARCHIVO
+	else
+		touch $ARCHIVO
+		chmod 600 $ARCHIVO
+	fi	
+}
+
+# Función para generar contraseñas aleatorias segun la longitud.
+function Generador_Contrasena() {
+	# Entrada de la longitud
+	INFO_CONTRASENA=$(dialog --form "Escribe la etiqueta y longitud de contraseña" 15 50 3 \
+		"Etiqueta:" 1 1 "" 1 10 20 0 \
+		"Longitud:" 2 1 "" 2 10 20 0 \
+		3>&1 1>&2 2>&3 3>&-)
+	
+	etiqueta=$(echo "$INFO_CONTRASENA" | sed -n '1p')
+	longitud=$(echo "$INFO_CONTRASENA" | sed -n '2p')
+	
+	# Crear contraseña urandom 
+	contrasena=$(head -c $longitud /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c $longitud)
+
+	# Encriptar contraseña y almacenar
+	cat $ARCHIVO | openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $TEMP_FILE 
+	echo "$etiqueta: $contrasena" >> $TEMP_FILE
+	cat $TEMP_FILE | openssl enc -e -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $ARCHIVO
+	cat $ARCHIVO > $TEMP_FILE
+	rm $TEMP_FILE
+
+	dialog --msgbox "Etiqueta: $etiqueta \nContraseña: $contrasena" 10 40
+
+	if [ $? -eq 0 ]; then
+		echo "$contrasena" | xclip -selection clipboard
+		dialog --msgbox "Contraseña Copiada" 5 35
+		return 0
+	fi
+}
+
+# Función para enlistar contraseña
+function Enlistar_Contrasenas() {	
+	# Comprobar si existe el archivo con contraseñas. skere
+	if [ ! -s $ARCHIVO ]; then
+		dialog -- clear --title "Accion incorrecta." \
+		--msgbox "No hay contraseñas para enlistar." 0 0 
+		return 1
+	else	
+		# Desencripta la lista de contraseñas y las mete en el archivo temporal con el agregado que pone los numeros de linea al costado.
+
+		cat $ARCHIVO | openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 | cat -b > $TEMP_FILE
+		
+		# Muestra la lista en pantalla y da la opcion de aceptar o copiar
+		dialog --title "Contraseñas" \
+		--extra-button \
+		--extra-label "Copiar" \
+		--textbox $TEMP_FILE 20 70
+		
+		# Funcion del boton copiar.
+		if [ $? -eq 3 ]; then
+			
+			# vuelve a meter las contraseñas desencriptadas en el archivo temporal pero sin los numeros al costado.
+			cat $ARCHIVO | openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $TEMP_FILE
+			
+			# Ventana que pregunta sobre el numero de linea de la contraseña que deseas obtener.
+			COPIAR=$(dialog --clear --inputbox "Escribe el numero de la contraseña" 8 4 3>&1 1>&2 2>&3 3>&-)
+			
+			# Comando que luego de fitrar la contraseña por el numero de linea lo copia en tu clipboard
+			sed 's/ //g' $TEMP_FILE |sed -n "$COPIAR"p | awk 'BEGIN{FS=":"} {printf($2)}' | xclip -selection clipboard
+			clear
+			
+			# Remplaza el archivo desencriptado por el encriptado para que al borrarlo no queden residuos inseguros.
+			$ARCHIVO > $TEMP_FILE
+			rm $TEMP_FILE
+		else	
+			# Remplaza el archivo desencriptado por el encriptado para que al borrarlo no queden residuos inseguros.
+			$ARCHIVO > $TEMP_FILE
+			rm $TEMP_FILE
+			clear
+			return 0
+		fi
+
+	fi	
+}
+
+# Función para buscar contraseña
+
+function Buscar_Contrasena() {	
+	# Desencriptación archivo temporal
+	cat $ARCHIVO | openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $TEMP_FILE
+	
+	# Ingresa el indice o parametro que buscara
+	indiceBusqueda=$(dialog --title "Busqueda" \
+		--inputbox "Ingresa lo que recuerdes de la contraseña" 10 40 \
+		3>&1 1>&2 2>&3 3>&-) 
+	
+	# realiza busqueda en contraseñas desencriptadas en archivo temporal y le agrega los numeros por linea.
+	Resultado=$(cat $TEMP_FILE | grep -i $indiceBusqueda)
+	echo "$Resultado" | cat -b > $TEMP_FILE
+	
+	# Crea la caja con los resultados de la busqueda y agrega boton de copiar.
+	dialog --title "Resultados" \
+		--extra-button \
+		--extra-label "Copiar" \
+		--textbox $TEMP_FILE 20 70
+	
+	# condicional para boton de accion copiar que permite enviar la contraseña seleccionada por numero de linea al clipboard.
+	if [ $? -eq 3 ]; then
+		echo "$Resultado" > $TEMP_FILE
+		NUM=$(dialog --title "Seleccion" --inputbox "Escriba el numero de la linea correspondiente" 10 30 3>&1 1>&2 2>&3 3>&-)
+		cat $TEMP_FILE | sed -n "$NUM"p | sed 's/ //g' | awk 'BEGIN{FS=":"}{printf($2)}' | xclip -selection clipboard
+		dialog --msgbox "Copia realizada" 10 35	
+	fi
+	
+	# Remplazo de archivo temp por contenido encriptado para no dejar residuos.
+	cat $ARCHIVO > $TEMP_FILE
+	
+	# Borrado de archivo temporal al finalizar
+	rm $TEMP_FILE 	
+}
+
+# Función para borrar contraseña (VERSION CORREGIDA)
+function Eliminar_Contrasena() {
+    
+    # 1. Desencriptar y enumerar para mostrar la lista en el textbox
+    cat $ARCHIVO | openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 | cat -b > $TEMP_FILE 
+
+    # Mostrar la caja de diálogo
+    dialog --title "Contraseñas" \
+        --extra-button \
+        --extra-label "Borrar" \
+        --textbox $TEMP_FILE 20 70 
+    
+    # Guardamos la respuesta del botón "Borrar"
+    local boton_presionado=$?
+    
+    # Condicional estricto: Si presionó "Borrar" (salida 3), entramos a la lógica
+    if [ $boton_presionado -eq 3 ]; then
+        
+        # Pedimos el número de línea que se quiere eliminar
+        DEL=$(dialog --title "Seleccion" --inputbox "Escribe el numero de la contraseña que deseas borrar" 10 30 3>&1 1>&2 2>&3 3>&-) 
+        local estado_input=$? # Guardamos si el usuario le dio a Aceptar (0) o Cancelar (1)
+        
+        if [ $estado_input -eq 0 ]; then
+            if [ -z "$DEL" ]; then
+                dialog --msgbox "El campo está vacio" 10 35
+            else
+                # el numero es valido se aplica el sed
+                cat $ARCHIVO | openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $TEMP_FILE
+                
+                # Borra la línea seleccionada
+                sed -i "${DEL}d" $TEMP_FILE
+                
+                # Cifra de vuelta al archivo real
+                cat $TEMP_FILE | openssl enc -e -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $ARCHIVO
+                
+                dialog --msgbox "Contraseña borrada con éxito" 10 35    
+            fi
+        else
+            dialog --msgbox "Operacion cancelada" 10 35
+        fi    
+    else
+        clear
+        return 0
+    fi
+
+    # Limpieza segura del archivo temporal
+    echo "limpio" > $TEMP_FILE
+    rm -f $TEMP_FILE    
+}
+
+# Función para agregar contraseñas
+function Agregar_Contrasena() {
+		
+	# Pequeño form dialog para agregar etiqueta y contraseña
+	INFO=$(dialog --form "Agregar contraseña" 15 50 3 \
+		"Etiqueta:" 1 1 "" 1 10 45 0 \
+		"Contra:" 2 1 "" 2 10 45 0 \
+		 3>&1 1>&2 2>&3 3>&-)
+	
+	# Variables que filtran el contenido del form para volverlas individuales.
+	etiqueta=$(echo "$INFO" | sed -n '1p')
+	contrasena=$(echo "$INFO" | sed -n '2p')
+
+	# Comandos que desencriptan y almacenan la nueva contraseña.
+	cat $ARCHIVO | openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $TEMP_FILE 
+	echo "$etiqueta: $contrasena" >> $TEMP_FILE
+
+	# Comandos que encriptan y remplazan archivo desencriptado para no dejar residuos.
+	cat $TEMP_FILE | openssl enc -e -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $ARCHIVO
+	cat $ARCHIVO > $TEMP_FILE
+	
+	# Comando que borra archivo temporal encriptado y caja que imprime la contraseña agregada a la lista.
+	rm $TEMP_FILE
+	dialog --title "Contraseña agregada" --msgbox "$etiqueta: $contrasena" 
+}
+
+# Funcion para crear copia
+function Backup() {
+	# Variable con directorio de respaldos 
+	BDIR="./RespaldoPass/"
+
+	# Condicional que crea la carpeta en caso de no existir y el archivo de respaldo.
+	if [ ! -d $BDIR ]; then
+		mkdir $BDIR
+		tar -zcf $BDIR/"$(date +%F).tar.gz" $ARCHIVO 
+		cp $BDIR/"$(date +%F).tar.gz" /data/data/com.termux/files/home/storage/downloads/Respaldo
+		
+		# Caja con aviso de que el respaldo se ha creado
+		dialog --clear --title "Respaldo" --msgbox "Archivo de respaldo realizado" 10 35
+	else
+		tar -zcf $BDIR/"$(date +%F).tar.gz" $ARCHIVO
+		cp $BDIR/"$(date +%F).tar.gz" /data/data/com.termux/files/home/storage/downloads/Respaldo
+
+		# Caja con aviso de que el respaldo se ha creado.
+		dialog --clear --title "Respaldo" --msgbox "Archivo de respaldo realizado" 10 35
+	fi
+}
+
+function Importar() {
+    # Asegurar que estamos en el HOME para empezar a buscar
+    cd $HOME
+    
+    while true; do
+        # Enlista los archivos del directorio actual y guarda en el temporal
+        ls > $TEMP_FILE
+        
+        # Variables con directorio actual y lista enumerada para el diálogo
+        directorio_actual=$(pwd)
+        lista_enumerada=$(cat -b $TEMP_FILE)
+        
+        # Caja que solicita el número de la línea
+        ubicacion=$(dialog --clear --title "Directorio: $directorio_actual" \
+            --extra-button --extra-label ".apw" \
+            --inputbox "$lista_enumerada" 30 70 3>&1 1>&2 2>&3 3>&-)
+        
+        local dialog_salida=$?
+        
+        # Si presiona Cancelar o sale de la caja, rompemos el bucle
+        if [ $dialog_salida -ne 0 ] && [ $dialog_salida -ne 3 ]; then
+            break
+        fi
+        
+        # Si presiona el botón extra ".apw", entra directo a la ruta de la app
+        if [ $dialog_salida -eq 3 ]; then
+            if [ -d "$HOME/.apw" ]; then
+                cd "$HOME/.apw"
+            else
+                dialog --msgbox "No existe el directorio .apw aún." 5 40
+            fi
+            rm -f $TEMP_FILE
+            continue
+        fi
+
+        # Si el campo está vacío, ignorar y reintentar
+        if [ -z "$ubicacion" ]; then
+            continue
+        fi
+
+        # Filtrar el nombre del archivo o carpeta elegido por el número de línea
+        directorio_imp=$(sed -n "${ubicacion}p" $TEMP_FILE)
+
+        # Validar que la selección no esté vacía en el archivo
+        if [ -z "$directorio_imp" ]; then
+            dialog --msgbox "Selección inválida." 5 30
+            continue
+        fi
+
+        # SI ES UN DIRECTORIO: Entramos en él
+        if [ -d "$directorio_imp" ]; then
+            cd "$directorio_imp"
+            rm -f $TEMP_FILE
+        # SI ES EL ARCHIVO DE RESPALDO (.tar.gz): Procesamos la importación
+        elif [ -f "$directorio_imp" ]; then
+            rm -f $TEMP_FILE # Limpiamos el temporal antes de la extracción
+            
+            # Crear directorio temporal limpio y seguro
+            mkdir -p $TEMP_DIR
+            
+            # 1. Copiar el archivo comprimido al directorio temporal
+            cp "$directorio_imp" "$TEMP_DIR/"
+            cd "$TEMP_DIR"
+            
+            # 2. Descomprimir el contenido de forma local en el directorio temporal
+            tar -xzf "$(basename "$directorio_imp")"
+            
+            # 3. Validar si el archivo de contraseñas (.Passwords.txt) existe en lo extraído
+            if [ -f "$ARCHIVO" ]; then
+                # Copiar de forma segura reemplazando el archivo local de la app
+                cp -f "$ARCHIVO" "$DIRECTORIO_CASA/$ARCHIVO"
+                chmod 600 "$DIRECTORIO_CASA/$ARCHIVO"
+                
+                dialog --clear --title "Importación" --msgbox "Importación Completada con éxito." 10 35
+            else
+                dialog --clear --title "Error" --msgbox "El archivo de respaldo no contiene un archivo válido de APW (.Passwords.txt)." 10 50
+            fi
+            
+            # Limpieza absoluta de la zona temporal
+            cd "$DIRECTORIO_CASA"
+            rm -rf "$TEMP_DIR"
+            
+            dialog --clear --title "Importación" --msgbox "Reinicie el Programa para aplicar los cambios." 10 45
+            break
+        fi
+    done
+    
+    # Asegurar limpieza al salir de la función
+    rm -f $TEMP_FILE
+    return 0
+}
+
+#Menú de selección nuevo con dialog
+function SELECCION() {
+	
+	# Variable que contiene la lista de opciones como cadenas de texto ordenadas.
+	opciones_menu=(
+	1 "Generar contraseña."	
+	2 "Listar contraseña."	
+	3 "Buscar contraseñas."	
+	4 "Eliminar contraseña."	
+	5 "Agregar contraseña."	
+	6 "Respaldar contraseña."	
+	7 "Importar contraseña."	
+	)
+	
+	# Menu dialog en variable opcion con lista de opciones.
+	opcion=$(dialog --clear --title "Bienvenido a tu APW" \
+	--backtitle "Administrador de contraseñas." \
+	--cancel-label "Salir" \
+	--stdout \
+	--menu "¿Que desea hacer?" 0 0 7 "${opciones_menu[@]}")
+
+	# Flujo para botones inferioes de aceptar o salir.
+	case $? in
+		# Flujo para la seleccion de funcion segun el resultado de variable opcion en caso de aceptar.
+		0)case $opcion in
+			1) clear;Generador_Contrasena;clear;;
+			2) clear;Enlistar_Contrasenas;clear;;
+			3) clear;Buscar_Contrasena;clear;;
+			4) clear;Eliminar_Contrasena;clear;;
+			5) clear;Agregar_Contrasena;clear;;
+			6) clear;Backup;clear;;	
+			7) clear;Importar;clear;;
+		  esac
+		;;
+		# Funcion de salir en caso de apretar Salir.
+		1)dialog --clear;clear;exit 0;; 
+	esac
+}
+
+#Ejecucion
+clear
+RUTA_TRABAJO
+INGRESO_CLAVE
+while true; do
+	SELECCION
+done
+exit 0
+
