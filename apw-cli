@@ -1,0 +1,288 @@
+#!/bin/bash
+# Administrador de contraseñas mejorado.
+
+# Configuración de Colores
+RED=$(tput setaf 1)
+GREEN=$(tput setaf 2)
+YELLOW=$(tput setaf 3)
+BLUE=$(tput setaf 4)
+MAGENTA=$(tput setaf 5)
+CYAN=$(tput setaf 6)
+WHITE=$(tput setaf 7)
+RESET=$(tput sgr0)
+
+# Funcion animacion saliendo
+function saliendo() {
+	echo -n "Saliendo del programa"
+	for i in {1..6}; do
+		echo -n "."
+		sleep 0.1
+	done
+}
+
+# Funcion para entrar en ruta de trabajo y crear archivo oculto 
+function Ruta_Trabajo() {
+	
+	# Cambiar directorio 
+	cd $HOME
+	ARCHIVO=".Passwords.txt"
+	CLAVE_FILE=".Passwordkey.enc"
+
+	# Solicitar clave de cifrado
+	echo "Ingrese su clave de cifrado:"
+	read -s CLAVE
+	clear
+
+	#Comprobar si es la primera ejeción
+	if [ ! -f $CLAVE_FILE ]; then
+		echo "Es la primera ejecución. Configuración clave de cifrado..."
+		echo "test" | openssl enc -e -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $CLAVE_FILE
+	else
+		#Verificar la clave de cifrado
+		if ! openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 -in $CLAVE_FILE &> /dev/null; then
+			>&2 echo "Clave de cifrado incorrecta."
+			exit 1
+		fi
+	fi
+
+	#Asegurar permisos restrictivos en el archivo
+	if [ -f $ARCHIVO ]; then
+		chmod 600 $ARCHIVO
+	else
+		touch $ARCHIVO
+		chmod 600 $ARCHIVO
+	fi
+
+}
+
+# Funcion Interfaz visual
+function Interfaz() {
+	
+	#Visuales y menu
+	echo "${CYAN}==============================================${RESET}"
+	echo "${CYAN}=Bienvenido a tu administrador de contraseñas=${RESET}"
+	echo -e "${CYAN}==============================================${RESET}\n"
+	
+	echo -e "\t${MAGENTA}g)${RESET} ${YELLOW}Generar contraseña.${RESET}"
+	echo -e "\t${MAGENTA}l)${RESET} ${YELLOW}listar contraseñas.${RESET}"
+	echo -e "\t${MAGENTA}b)${RESET} ${YELLOW}Buscar contraseñas.${RESET}"
+	echo -e "\t${MAGENTA}e)${RESET} ${YELLOW}Eliminar contraseña.${RESET}"
+	echo -e "\t${MAGENTA}a)${RESET} ${YELLOW}Agregar contraseña.${RESET}"
+	echo -e "\t${MAGENTA}s)${RESET} ${YELLOW}Respaldar contraseñas.${RESET}"
+	echo -e "\t${MAGENTA}i)${RESET} ${YELLOW}Importar contraseñas.${RESET}"
+	echo -e "\t${MAGENTA}x)${RESET} ${RED}Salir del Programa.${RESET}\n"
+}
+
+# Función para generar contraseñas aleatorias segun la longitud.
+function Generador_Contrasena() {
+	#Creacion y identificación de archivo temporal
+	temp_file=$(mktemp)	
+	# Entrada de la longitud
+	read -p "Ingresa la longitud para la contraseña: " longitud
+
+	# Confirmación de que se ingresó una longitud
+	if [ -z $longitud ]; then
+		>&2 echo No se ha ingresado una longitud valida
+		exit 1
+	fi	
+	# Crear contraseña urandom 
+	contrasena=$(head -c $longitud /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c $longitud)
+
+	# Imprimir contraseña y Entrada para nombrarla
+	echo Esta es tu contraseña: $contrasena
+	read -p "¿Que nombre deseas ponerle a tu contraseña?: " etiqueta
+	clear
+
+	# Encriptar contraseña y almacenar
+	cat $ARCHIVO | openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $temp_file 
+	echo "$etiqueta: $contrasena" >> $temp_file
+	cat $temp_file | openssl enc -e -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $ARCHIVO
+	cat $ARCHIVO > $temp_file
+	rm $temp_file
+	echo "$etiqueta: $contrasena"
+	
+	# Salida
+	sleep 1
+	echo Presiona Enter para continuar
+	read	
+}
+
+# Función para enlistar contraseña
+function Enlistar_Contrasenas() {
+	
+	# Comprobar si hay contraseñas
+	if [ ! -s $ARCHIVO ]; then
+		>&2 echo "No hay contraseñas para Enlistar."
+		sleep 1
+		return 1
+	else
+	   	# Limpiar pantalla y mostrar Contraseñas desencriptadas en pantalla
+		clear
+		echo "Contraseñas:"
+		cat $ARCHIVO | openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2
+		
+		# Salida
+		sleep 1
+		echo Presiona Enter para continuar
+		read
+	fi	
+}
+
+# Función para buscar contraseña
+
+function Buscar_Contrasena() {
+	# Crear archivo temporal
+	temp_file=$(mktemp)
+	
+	# Desencriptación archivo temporal
+	cat $ARCHIVO | openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $temp_file
+	
+	# Input
+	read -p "Porfavor introduce el nombre o partes de la contraseña que recuerdes: " indice
+	clear
+	echo "Esto son los resultado:"
+	
+	# mostreo de busqueda en archivo temp desencriptado
+	cat $temp_file | grep -i $indice
+	echo "Presiona cualquier tecla para continuar."
+	
+	# Remplazo de archivo temp por contenido encriptado
+	cat $ARCHIVO > $temp_file
+	
+	# Borrado de archivo temporal al finalizar
+	rm $temp_file 
+	read
+	sleep 1
+	
+}
+# Función para borrar contraseña
+function Eliminar_Contrasena() {
+	
+	#Desencriptar archivo y enlistar contraseñas
+	
+	# Creación y desencriptacion archivo temporal
+	temp_file=$(mktemp)
+	cat $ARCHIVO | openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $temp_file 
+
+	# Enlistado de contraseñas de archivo temporal con argumento b para nombre de lineas
+	echo "Contraseñas:"
+	cat -b $temp_file
+	
+	# Borrar contraseña
+	read -p "Escribe el número de la contraseña a borrar: " DEL
+	sed -i "${DEL}d" $temp_file
+
+	# Volver a encriptar las contraseñas
+	cat $temp_file | openssl enc -e -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $ARCHIVO
+	cat $ARCHIVO > $temp_file
+	rm $temp_file	
+	echo Contraseña eliminada
+	
+	# Salida
+	sleep 1
+	echo Presiona Enter para continuar
+	read
+}
+
+# Función para agregar contraseñas
+function Agregar_Contrasena() {
+	
+	temp_file=$(mktemp)
+	read -p "Ingresa la etiqueta de la contraseña: " etiqueta
+	read -p "Ingresa la contraseña: " contrasena
+	clear
+
+	#Almacenar contraseñas y imprimir resultado
+	cat $ARCHIVO | openssl enc -d -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $temp_file 
+	echo "$etiqueta: $contrasena" >> $temp_file
+	cat $temp_file | openssl enc -e -aes-256-cbc -base64 -pass pass:"$CLAVE" -pbkdf2 > $ARCHIVO
+	cat $ARCHIVO > $temp_file
+	rm $temp_file
+	echo "$etiqueta: $contrasena"
+
+	# Salida
+	sleep 1
+	echo "Presiona Enter para continuar"
+	read
+}
+
+# Funcion para crear copia
+function Backup() {
+	# Directorio de respaldo
+	BDIR="./RespaldoPass/"
+
+	clear
+
+	# Condicional que crea la carpeta y el archivo de respaldo.
+	if [ ! -d $BDIR ]; then
+		mkdir $BDIR
+		tar -zcf $BDIR/"$(date +%F).tar.gz" $ARCHIVO 
+		echo "Archivo de respaldo realizado."
+		read
+		
+	else
+		tar -zcf $BDIR/"$(date +%F).tar.gz" $ARCHIVO
+		echo "Archivo de respaldo realizado."
+		echo "Presione ENTER para contiuar." 
+		read
+	fi
+}
+
+function Importar() {
+	clear
+	
+	# Algoritmo para buscar archivo de importacion.
+	while true 
+	do
+		temp_dir=$(mktemp -d)
+		temp_file=$(mktemp)
+		
+		ls > $temp_file
+		echo "Directorios:"
+		cat -b $temp_file
+		read -p "Escriba el numero de la ubicacion o archivo: " ubicacion
+		directorio_imp=$(cat $temp_file | sed -n "$ubicacion"p $temp_file)
+		clear
+
+		if [ -d $directorio_imp ]; then
+			cd $directorio_imp
+			pwd
+			rm $temp_file
+		else
+			cp $directorio_imp $temp_dir
+			cd $temp_dir
+			tar -xzf $directorio_imp  
+			rsync --progress $ARCHIVO $HOME/$ARCHIVO
+			echo "Importación completada."	
+			read
+			rm -rf $temp_dir
+			break
+		fi
+	done
+}
+
+#Menú de selección
+function Seleccion() {
+	read -p "${BLUE}Escribe la opcion que deseas:${RESET} " opcion
+	case $opcion in
+		g|G) Generador_Contrasena;clear;;
+		l|L) Enlistar_Contrasenas;clear;;
+		b|B) Buscar_Contrasena;clear;;
+		e|E) clear;Eliminar_Contrasena;clear;;
+		a|A) Agregar_Contrasena;clear;;
+		s|S) Backup;clear;;	
+		i|I) Importar;clear;;
+		x|X) clear;saliendo;clear;exit 0;;
+		*) >&2 echo Opcion invalida;sleep 1;clear;return 1;;
+	esac
+}
+
+#Ejecucion
+clear
+Ruta_Trabajo
+while true; do
+	Interfaz
+	Seleccion
+done
+exit 0
+
